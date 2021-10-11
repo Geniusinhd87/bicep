@@ -18,7 +18,6 @@ namespace Bicep.Core.UnitTests.Diagnostics.LinterRuleTests
             AssertLinterRuleDiagnostics(NoUnnecessaryDependsOnRule.Code, text, expectedMessages, onCompileErrors);
         }
 
-        // This is the passing example in the docs
         [TestMethod]
         public void If_No_Simple_UnnecessaryDependsOn_ShouldPass()
         {
@@ -57,7 +56,7 @@ namespace Bicep.Core.UnitTests.Diagnostics.LinterRuleTests
                 }
                 dependsOn: [
                     webApplication
-                    webApplication
+                    webApplication //asdf fail because of duplicate entry?
                     webApplication2
                 ]
               }
@@ -202,7 +201,43 @@ namespace Bicep.Core.UnitTests.Diagnostics.LinterRuleTests
         }
 
         [TestMethod]
-        public void If_Explicit_DependsOn_ToParent_FromGrandChild_UsingColonNotation_ShouldFail()
+        public void If_DuplicateEntries_ShouldFailForEach()
+        {
+            CompileAndTest(
+               @"
+                resource vn 'Microsoft.Network/virtualNetworks@2020-06-01' existing =  {
+                  name: 'vn'
+
+                  resource subnet1 'subnets@2020-06-01' = {
+                    name: 'subnet1'
+                    properties: {
+                      addressPrefix: '10.0.1.0/24'
+                    }
+                  }
+
+                  resource subnet2 'subnets@2020-06-01' = {
+                    name: 'subnet2'
+                    properties: {
+                      addressPrefix: '10.0.1.0/24'
+                    }
+                    dependsOn: [
+                      vn
+                      subnet1
+                      vn
+                    ]
+                  }
+                }
+            ",
+              OnCompileErrors.Fail,
+              new string[] {
+                "Remove unnecessary dependsOn entry 'vn'.",
+                "Remove unnecessary dependsOn entry 'vn'."
+              }
+            );
+        }
+
+        [TestMethod]
+        public void If_Explicit_DependsOn_ToParent_FromGrandChild_UsingColonNotation_ShouldFail() //asdff
         {
             CompileAndTest(
                 @"
@@ -239,7 +274,122 @@ namespace Bicep.Core.UnitTests.Diagnostics.LinterRuleTests
         }
 
         [TestMethod]
-        public void If_ReferencesResourceByIndex_Should_WhatAsdff()
+        public void If_UnnecessaryReferenceToParent_ViaIndex_Should_Fail() //asdff
+        {
+            CompileAndTest(@"
+                resource stgAccts 'Microsoft.Storage/storageAccounts@2019-06-01' existing = [for i in range(0, 3): {
+                  name: 'stgAcct${i}'
+                }]
+
+                resource blobServices 'Microsoft.Storage/storageAccounts/blobServices@2021-04-01'  = [for i in range(0, 3): {
+                  name: 'blobs${i}'
+                  parent: stgAccts[i]
+                  dependsOn: [
+                    stgAccts[i] // This is the parent so is unnecessary
+                  ]
+                }]
+            ",
+              OnCompileErrors.Fail,
+              new string[] {
+                "Remove unnecessary dependsOn entry 'stgAccts[i][0]'."
+              }
+            );
+        }
+
+        [TestMethod]
+        public void If_UnnecessaryReferenceToParent_ViaIndex_Should_Fail_asdf() //asdff
+        {
+            CompileAndTest(@"
+                resource stgAccts 'Microsoft.Storage/storageAccounts@2019-06-01' existing = [for i in range(0, 3): {
+                  name: 'stgAcct${i}'
+                }]
+
+                resource blobServices 'Microsoft.Storage/storageAccounts/blobServices@2021-04-01'  = [for i in range(0, 3): {
+                  name: 'blobs${i}'
+                  parent: stgAccts[i]
+                  dependsOn: [
+                    stgAccts[i + 1] // This is not the parent so is necessary asdf??
+                  ]
+                }]
+            ",
+              OnCompileErrors.Fail,
+              new string[] {
+                "Remove unnecessary dependsOn entry 'stgAccts[i+1][1]'."
+              }
+            );
+        }
+
+        [TestMethod]
+        public void If_UnnecessaryReferenceToParent_FromLoop_ToNonLoopedParent_Should_Fail() //asdff
+        {
+            CompileAndTest(@"
+                resource vn 'Microsoft.Network/virtualNetworks@2021-02-01' existing = {
+                  name: 'vn'
+                }
+
+                resource blobServices 'Microsoft.Network/virtualNetworks/subnets@2021-02-01' = [for i in range(0, 3): {
+                  name: 'blobs${i}'
+                  parent: vn
+                  dependsOn: [
+                    vn
+                  ]
+                }]
+            ",
+              OnCompileErrors.Fail,
+              new string[] {
+                "Remove unnecessary dependsOn entry 'vn'."
+              }
+            );
+        }
+
+        [TestMethod]
+        public void If_UnnecessaryReferenceToParentCollection_FromNonLoopedChild_Should_Passasdf() //asdff
+        {
+            CompileAndTest(@"
+                resource vn 'Microsoft.Network/virtualNetworks@2021-02-01' existing = [for i in range(0, 1): {
+                  name: 'vn${i}'
+                }]
+
+                resource subnet 'Microsoft.Network/virtualNetworks/subnets@2021-02-01' = {
+                  name: 'subnet'
+                  parent: vn[0]
+                  dependsOn: [
+                    vn[0]   //asdf?
+                  ]
+                }
+            ",
+              OnCompileErrors.Fail,
+              new string[] {
+                "Remove unnecessary dependsOn entry 'vn'."
+              }
+            );
+        }
+
+        [TestMethod]
+        public void If_UnnecessaryReferenceToParentCollectionEntry_FromNonLoopedChild_Should_Passasdf() //asdff
+        {
+            CompileAndTest(@"
+                resource vn 'Microsoft.Network/virtualNetworks@2021-02-01' existing = [for i in range(0, 1): {
+                  name: 'vn${i}'
+                }]
+
+                resource subnet 'Microsoft.Network/virtualNetworks/subnets@2021-02-01' = {
+                  name: 'subnet'
+                  parent: vn[0]
+                  dependsOn: [
+                    vn // asdf?
+                  ]
+                }
+            ",
+              OnCompileErrors.Fail,
+              new string[] {
+                "Remove unnecessary dependsOn entry 'vn'."
+              }
+            );
+        }
+
+        [TestMethod]
+        public void If_ReferencesResourceByIndex_Should_WhatAsdff() //asdff
         {
             CompileAndTest(@"
               param storageAccounts array
@@ -283,11 +433,8 @@ namespace Bicep.Core.UnitTests.Diagnostics.LinterRuleTests
     }
 }
 
-// TODO asdff: nested resources, syntax errors, duplicate dependson?, specify via id e.g. Test_Issue3182, dependson in existing resource?
+// TODO asdff: syntax errors, specify via id e.g. Test_Issue3182
 // TODO asdff: dependson in modules, indexed dependencies from loops, cycles
-// TODO asdff: child resources are automatically inferred
-// todo asdff: multiple dependendsOn entries, multiple resources, multiple references to resource
 // todo asdff: ignore stuff like stg.name inside dependsOn (I assume this would be an error)
-// todo asdff: vnet::subnet1 notation?
-
-// asdff ResourceDependsOnPropertyName
+// todo asdff: if dependsOn has index, ignore...?
+// todo asdff: reference to a collection of resources
